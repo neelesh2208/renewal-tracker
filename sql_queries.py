@@ -6,6 +6,7 @@ NOTE:
   - LIKE patterns mein % ko %% likhna zaroori hai (psycopg2 escaping).
   - Dates TEXT type mein hain -> ::date cast kiya hai.
   - Har query ka output 'event_key' column dena chahiye (unique per row).
+  - district_name patient_registration mein hi hai — koi join nahi chahiye.
 """
 
 # ============================================================
@@ -64,23 +65,16 @@ diagnosis_data AS (
         primary_diagnosis
     FROM public.patient_provision_diagnosis_treatment
     ORDER BY patient_id, date_updated DESC NULLS LAST
-),
-
-appointment_flag AS (
-    SELECT DISTINCT patient_id, TRUE AS has_appointment
-    FROM public.patient_appointment
-    WHERE appointment_time_slot IS NOT NULL
-      AND appointment_time_slot <> ''
 )
 
 SELECT
     event_key,
-    %(run_date)s::date AS report_date,
+    patient_id,
     patient_name,
     mobile_number,
     hosp_name,
+    district_name,
     plan_status,
-    direct_after_opd,
     package_name,
     package_price,
     amount,
@@ -94,25 +88,21 @@ SELECT
     psychiatrist_name,
     counsellor_name,
     primary_diagnosis,
-    package_diagnosis_name,
     patient_type,
     lead_source,
     marketing_person_name,
-    induction_done,
     gender_name,
-    age,
-    patient_id,
-    patient_ref_id
+    age
 FROM (
     SELECT
         pr.patient_id || '_' || COALESCE(pp.patient_rpp_id, pp._id) AS event_key,
         pr.patient_id,
-        pr.patient_ref_id::bigint      AS patient_ref_id,
         pr.patient_name,
         pr.mobile_number::bigint       AS mobile_number,
+        pp.hosp_name,
+        pr.district_name,
         pr.gender_name,
         pr.age,
-        pp.hosp_name,
         pr.lead_source,
         pr.marketing_person_name,
         rp.psychologist_name,
@@ -129,8 +119,6 @@ FROM (
         pp.package_name,
         pp.package_price,
         pp.amount,
-        pp.package_diagnosis_name,
-        pr.induction_done,
 
         COALESCE(
             dd.primary_diagnosis,
@@ -147,13 +135,6 @@ FROM (
         END AS plan_status,
 
         CASE
-            WHEN pp.prev_enrollment IS NULL AND af.has_appointment IS NULL
-                THEN 'Direct Plan'
-            WHEN pp.prev_enrollment IS NULL AND af.has_appointment = TRUE
-                THEN 'After OPD'
-        END AS direct_after_opd,
-
-        CASE
             WHEN pr.lead_source = 'Corporate' THEN 'Corporate'
             WHEN pr.lead_source = 'NTPC' THEN 'CSR'
             WHEN pr.lead_source = 'CSR' AND pp.amount = 0 THEN 'CSR'
@@ -168,10 +149,9 @@ FROM (
         ) AS rn
 
     FROM public.patient_registration pr
-    JOIN plan_history pp          ON pr.patient_id = pp.patient_id
-    LEFT JOIN role_pivot rp       ON rp.patient_id = pr.patient_id
-    LEFT JOIN diagnosis_data dd   ON dd.patient_id = pr.patient_id
-    LEFT JOIN appointment_flag af ON af.patient_id = pr.patient_id
+    JOIN plan_history pp        ON pr.patient_id = pp.patient_id
+    LEFT JOIN role_pivot rp     ON rp.patient_id = pr.patient_id
+    LEFT JOIN diagnosis_data dd ON dd.patient_id = pr.patient_id
 
     WHERE pp.enrollment_date::date = %(run_date)s::date
       AND LOWER(pr.patient_name) NOT LIKE 'test%%'
@@ -197,15 +177,11 @@ WITH latest_plan AS (
         prpp.hosp_name,
         prpp.lead_source,
         prpp.amount,
-        prpp.assigned_to_name,
         prpp.mobile_number,
-        prpp.renewalstatus,
         prpp.enrollment_date::date AS enrollment_date,
         prpp.due_date::date        AS due_date,
         prpp.hold_by_name,
         prpp.hold_date,
-        prpp.psychiatrist_name,
-        prpp.psychologist_name,
         prpp.package_name,
         prpp.package_price
     FROM public.patient_rpp_registration prpp
@@ -217,28 +193,32 @@ WITH latest_plan AS (
     ORDER BY prpp.patient_ref_id, prpp.due_date::date DESC
 ),
 
--- Ek plan ke multiple assignments hote hain -> sirf latest lo (duplicate rows rokne ke liye)
-latest_assignment AS (
-    SELECT DISTINCT ON (patient_rpp_id)
-        patient_rpp_id,
-        status
-    FROM public.patient_rpp_assignment
-    ORDER BY patient_rpp_id, date_created DESC NULLS LAST
+latest_roles AS (
+    SELECT DISTINCT ON (pa.patient_id, pra.assigned_to_role_name)
+        pa.patient_id,
+        pra.assigned_to_role_name,
+        pra.assigned_to_name
+    FROM public.patient_rpp_assignment pra
+    JOIN public.patient_appointment pa
+        ON pa.patient_rpp_id = pra.patient_rpp_id
+    WHERE pra.assigned_to_role_name IN ('Psychologist','Psychiatrist','Counsellor')
+    ORDER BY pa.patient_id, pra.assigned_to_role_name, pra.date_created DESC
+),
+
+role_pivot AS (
+    SELECT
+        patient_id,
+        MAX(CASE WHEN assigned_to_role_name='Psychologist' THEN assigned_to_name END) AS psychologist_name,
+        MAX(CASE WHEN assigned_to_role_name='Psychiatrist' THEN assigned_to_name END) AS psychiatrist_name,
+        MAX(CASE WHEN assigned_to_role_name='Counsellor'  THEN assigned_to_name END) AS counsellor_name
+    FROM latest_roles
+    GROUP BY patient_id
 ),
 
 plan_count AS (
     SELECT patient_id, COUNT(*) AS total_plans
     FROM public.patient_rpp_registration
     GROUP BY patient_id
-),
-
-diagnosis_data AS (
-    SELECT DISTINCT ON (patient_id)
-        patient_id,
-        diagnosis_name,
-        primary_diagnosis
-    FROM public.patient_provision_diagnosis_treatment
-    ORDER BY patient_id, date_updated DESC NULLS LAST
 ),
 
 last_session AS (
@@ -250,50 +230,40 @@ last_session AS (
 
 SELECT
     lp.patient_id || '_' || COALESCE(lp.patient_rpp_id, lp._id) AS event_key,
-    %(run_date)s::date AS report_date,
+    lp.patient_id,
     pr.patient_name,
-    lp.mobile_number::bigint AS mobile_number,
+    lp.mobile_number::bigint                AS mobile_number,
     lp.hosp_name,
+    pr.district_name,
+    lp.enrollment_date,
     lp.due_date,
     (lp.due_date + 1)                       AS inactive_date,
     (CURRENT_DATE - lp.due_date)            AS days_since_expiry,
-    lp.enrollment_date,
     (lp.due_date - lp.enrollment_date)      AS plan_days,
-    pc.total_plans,
     CASE WHEN pc.total_plans = 1 THEN 'First plan drop'
          ELSE 'Repeat client drop'
     END                                     AS drop_type,
+    pc.total_plans,
     lp.package_name,
     lp.package_price,
     lp.amount,
-    lp.renewalstatus,
     lp.hold_by_name,
     lp.hold_date,
-    la.status                               AS assignment_status,
-    lp.psychologist_name,
-    lp.psychiatrist_name,
-    lp.assigned_to_name,
+    rp.psychologist_name,
+    rp.psychiatrist_name,
+    rp.counsellor_name,
     ls.last_session_date,
-    COALESCE(
-        dd.primary_diagnosis,
-        (SELECT string_agg(trim(both E' \n\t\r' from elem), ', ')
-         FROM jsonb_array_elements_text(dd.diagnosis_name) AS elem)
-    ) AS primary_diagnosis,
     lp.lead_source,
     pr.age,
     pr.gender_name,
-    pr.occupation,
-    'Regular'::text AS patient_type,
-    lp.patient_ref_id,
-    lp.patient_id
+    'Regular'::text AS patient_type
 
 FROM latest_plan lp
 INNER JOIN public.patient_registration pr
     ON lp.patient_ref_id = pr.patient_ref_id
-LEFT JOIN latest_assignment la ON la.patient_rpp_id = lp.patient_rpp_id
-LEFT JOIN plan_count pc        ON pc.patient_id     = lp.patient_id
-LEFT JOIN diagnosis_data dd    ON dd.patient_id     = lp.patient_id
-LEFT JOIN last_session ls      ON ls.patient_id     = lp.patient_id
+LEFT JOIN role_pivot rp   ON rp.patient_id = lp.patient_id
+LEFT JOIN plan_count pc   ON pc.patient_id = lp.patient_id
+LEFT JOIN last_session ls ON ls.patient_id = lp.patient_id
 
 WHERE lp.due_date = %(run_date)s::date
   AND LOWER(pr.patient_name) NOT LIKE 'test%%'
