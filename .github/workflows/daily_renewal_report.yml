@@ -1,0 +1,49 @@
+name: Daily Renewal Tracker
+
+on:
+  schedule:
+    - cron: "45 3 * * *"   # 09:15 AM IST
+  workflow_dispatch:
+    inputs:
+      run_date:
+        description: "YYYY-MM-DD (khaali = kal ki date)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Sheet mein likhe bina test"
+        type: boolean
+        default: false
+
+concurrency:
+  group: renewal-tracker
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run tracker
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          RUN_DATE: ${{ github.event.inputs.run_date }}
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="--dry-run"
+          fi
+          python main.py $ARGS

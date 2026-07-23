@@ -1,0 +1,9 @@
+*.json
+!*.example.json
+.env
+credentials/
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.csv
