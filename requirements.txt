@@ -1,4 +1,4 @@
 psycopg2-binary==2.9.9
 pandas==2.2.2
 gspread==6.1.2
-google-auth==2.32.0
+google-auth==2.32.0python-dotenv==1.0.1
