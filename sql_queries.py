@@ -1,17 +1,22 @@
 """
 SQL queries for renewal tracker.
 
+Dono queries date RANGE pe chalti hain:
+    %(start_date)s  se  %(end_date)s   (dono inclusive)
+
+Daily run mein start = end = kal ki date (D-1).
+Backfill mein start = 2026-07-01, end = kal.
+
 NOTE:
-  - %(run_date)s placeholder psycopg2 safely bind karega.
   - LIKE patterns mein % ko %% likhna zaroori hai (psycopg2 escaping).
   - Dates TEXT type mein hain -> ::date cast kiya hai.
-  - Har query ka output 'event_key' column dena chahiye (unique per row).
+  - Har query 'event_key' column deti hai (unique per row, dedup ke liye).
   - district_name patient_registration mein hi hai — koi join nahi chahiye.
 """
 
 # ============================================================
 # RENEWED / NEW PLAN
-# run_date ko jinka plan start hua (enrollment_date)
+# Jinka plan range ke andar start hua (enrollment_date)
 #
 # plan_status:
 #   NEW PLAN     -> pehla plan
@@ -153,18 +158,21 @@ FROM (
     LEFT JOIN role_pivot rp     ON rp.patient_id = pr.patient_id
     LEFT JOIN diagnosis_data dd ON dd.patient_id = pr.patient_id
 
-    WHERE pp.enrollment_date::date = %(run_date)s::date
+    WHERE pp.enrollment_date::date BETWEEN %(start_date)s::date AND %(end_date)s::date
       AND LOWER(pr.patient_name) NOT LIKE 'test%%'
       AND LOWER(pr.patient_name) NOT LIKE '%%test'
 ) t
 WHERE rn = 1
-ORDER BY plan_status, enrollment_date;
+ORDER BY enrollment_date, plan_status;
 """
 
 
 # ============================================================
 # DROPPED
-# Jinka due_date run_date tha (plan expire ho gaya)
+# Jinka plan range ke andar expire hua AUR ab tak renew NAHI kiya.
+#
+# "renew nahi kiya" = us plan ke due_date ke baad koi naya plan
+# enroll nahi hua (aaj tak).
 # ============================================================
 
 DROPPED_QUERY = """
@@ -265,7 +273,16 @@ LEFT JOIN role_pivot rp   ON rp.patient_id = lp.patient_id
 LEFT JOIN plan_count pc   ON pc.patient_id = lp.patient_id
 LEFT JOIN last_session ls ON ls.patient_id = lp.patient_id
 
-WHERE lp.due_date = %(run_date)s::date
+WHERE lp.due_date BETWEEN %(start_date)s::date AND %(end_date)s::date
+
+  -- Ab tak renew nahi kiya: due_date ke baad koi naya plan nahi
+  AND NOT EXISTS (
+      SELECT 1
+      FROM public.patient_rpp_registration nxt
+      WHERE nxt.patient_id = lp.patient_id
+        AND nxt.enrollment_date::date > lp.due_date
+  )
+
   AND LOWER(pr.patient_name) NOT LIKE 'test%%'
   AND LOWER(pr.patient_name) NOT LIKE '%%test'
 

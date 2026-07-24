@@ -2,25 +2,38 @@ name: Daily Renewal Tracker
 
 on:
   schedule:
-    - cron: "45 3 * * *"   # 09:15 AM IST
+    # 03:45 UTC = 09:15 AM IST (buffer rakha hai, Actions cron late chalta hai)
+    - cron: "45 3 * * *"
   workflow_dispatch:
     inputs:
-      run_date:
-        description: "YYYY-MM-DD (khaali = kal ki date)"
+      start_date:
+        description: "Range start YYYY-MM-DD (khaali = kal ki date)"
+        required: false
+        default: ""
+      end_date:
+        description: "Range end YYYY-MM-DD (khaali = kal ki date)"
         required: false
         default: ""
       dry_run:
         description: "Sheet mein likhe bina test"
         type: boolean
+        required: false
+        default: false
+      no_mail:
+        description: "Email mat bhejo"
+        type: boolean
+        required: false
         default: false
 
 concurrency:
   group: renewal-tracker
+  cancel-in-progress: false
 
 jobs:
   report:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+
     steps:
       - uses: actions/checkout@v4
 
@@ -40,10 +53,17 @@ jobs:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
-          RUN_DATE: ${{ github.event.inputs.run_date }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          START_DATE: ${{ github.event.inputs.start_date }}
+          END_DATE: ${{ github.event.inputs.end_date }}
         run: |
           ARGS=""
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            ARGS="--dry-run"
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ "${{ github.event.inputs.no_mail }}" = "true" ]; then
+            ARGS="$ARGS --no-mail"
           fi
           python main.py $ARGS

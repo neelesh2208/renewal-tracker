@@ -17,7 +17,12 @@ DB_CONFIG = {
     "options": "-c statement_timeout=120000",
 }
 
+# Tracker sheet — jahan output jaata hai
 SHEET_ID = os.environ["SHEET_ID"]
+
+# Source sheet — jahan se dropout data aata hai
+SOURCE_SHEET_ID = "1TyP-c1YYXI5dEAdeLkTKMktz13v7xXdTlU97K6-MB9E"
+SOURCE_TAB = "Active Renewals"
 
 # Local pe sa.json file se, GitHub Actions pe secret se
 _sa = os.environ.get("GCP_SA_JSON")
@@ -29,8 +34,14 @@ else:
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+# Script khud manage karta hai — mail gaya ya nahi
+MAIL_COLS = ["Mail_Sent", "Mail_Sent_On"]
+
 # Outreach team ye columns manually bharegi — script kabhi overwrite nahi karta
-TRACKER_COLS = ["Outreach_Status", "Outreach_Date", "Assigned_To", "Feedback_Notes"]
+OUTREACH_COLS = ["Outreach_Status", "Outreach_Date", "Assigned_To", "Feedback_Notes"]
+
+# Data columns ke baad ye sab lagte hain (order matters)
+TRACKER_COLS = MAIL_COLS + OUTREACH_COLS
 
 TAB_RENEWED = "Renewed"
 TAB_DROPPED = "Dropped"
